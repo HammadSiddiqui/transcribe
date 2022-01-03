@@ -1,4 +1,5 @@
-var express = require('express');    //Express Web Server 
+require('dotenv').config();
+var express = require('express');    //Express Web Server
 var busboy = require('connect-busboy'); //middleware for form/file upload
 var path = require('path');     //used for file path
 var fs = require('fs-extra');       //File System - for file manipulation
@@ -33,7 +34,7 @@ app.get('/', function (req,res){
 
 
 app.route('/upload')
-    .post(function (req, res, next) {
+    .post( function (req, res, next) {
 
         var fstream;
         req.pipe(req.busboy);
@@ -43,41 +44,84 @@ app.route('/upload')
             //Path where image will be uploaded
             fstream = fs.createWriteStream(__dirname + '/audio/' + filename.filename);
             file.pipe(fstream);
-            fstream.on('close', function () {
+            fstream.on('close', async function () {
                 console.log("Upload Finished of " + filename.filename);
-                res.send('File uploaded');           //where to go next
+                //rename the file to unique identifier mp3 file
+                let uniqueFileName = (Math.random() + 1).toString(36).substring(7) + '.mp3'
+                fs.rename('./audio/' + filename.filename, './audio/'+uniqueFileName, function(err) {
+                    if ( err ) console.log('ERROR: ' + err);
+                });
+                let uploadToGCP = await uploadFile(uniqueFileName)
+                //uploadToGCP = "uploaded"
+                if(uploadToGCP == "uploaded") {
+                    let transcription = await transcribe(uniqueFileName)
+                    console.log(transcription)
+                    res.send(transcription)
+                }  else {
+                    res.send("transcription failed")
+                }
+               // res.send("ok")
             });
         });
     });
 
 
+//UPLOAD TO GCP
+// Imports the Google Cloud client library
+const {Storage} = require('@google-cloud/storage');
+// Creates a client
+const storage = new Storage();
+
+let bucketName = 'gcp-transcibe-audios'
+
+async function uploadFile(filename) {
+    try{
+        await storage.bucket(bucketName).upload('./audio/'+filename, {
+            destination: filename,
+        });
+        console.log(`${filename} uploaded to ${bucketName}`);
+        return "uploaded"
+    } catch (e) {
+        console.log(e)
+    }
+
+}
+
+
+
 // Creates a client
 const client = new speech.SpeechClient();
 
-async function transcribe() {
+async function transcribe(filename) {
     // The path to the remote LINEAR16 file
-    const gcsUri = 'gs://cloud-samples-data/speech/brooklyn_bridge.raw';
+    try {
+        const gcsUri =  'gs://gcp-transcibe-audios/'+filename; //'gs://gcp-transcibe-audios/qmixr.mp3'
 
-    // The audio file's encoding, sample rate in hertz, and BCP-47 language code
-    const audio = {
-        uri: gcsUri,
-    };
-    const config = {
-        encoding: 'MP3',
-        sampleRateHertz: 22050,
-        languageCode: 'en-US',
-    };
-    const request = {
-        audio: audio,
-        config: config,
-    };
+        // The audio file's encoding, sample rate in hertz, and BCP-47 language code
+        const audio = {
+            uri: gcsUri,
+        };
+        const config = {
+            keyFile: './service-account-file.json',
+            projectId: 'idenfo-direct-production',
+            encoding: 'MP3',
+            sampleRateHertz: 22050,
+            languageCode: 'en-US',
+        };
+        const request = {
+            audio: audio,
+            config: config,
+        };
 
-    // Detects speech in the audio file
-    const [response] = await client.recognize(request);
-    const transcription = response.results
-        .map(result => result.alternatives[0].transcript)
-        .join('\n');
-    console.log(`Transcription: ${transcription}`);
+        // Detects speech in the audio file
+        const [response] = await client.recognize(request);
+        const transcription = response.results.map(result => result.alternatives[0].transcript)
+            .join('\n');
+        console.log(`Transcription: ${transcription}`);
+        return transcription
+    } catch (e) {
+        console.log(e)
+    }
 }
 
 var server = app.listen(3030, function() {
