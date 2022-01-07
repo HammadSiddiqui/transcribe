@@ -32,7 +32,7 @@ app.get('/', function (req,res){
 //
 // app.post('/upload', upload.single('file'));
 
-app.route('/transcribe', async function(req, res) {
+app.route('/transcribe').get( async function(req, res) {
     let transcription = await transcribe('innocent.mp3')
     console.log(transcription)
     res.send(transcription)
